@@ -79,6 +79,8 @@ void texteditBackspace(texteditor * editor);
 void texteditDelete(texteditor * editor);
 void texteditDeleteLine(texteditor * editor);
 
+bool texteditFindCharCommand(char * curEditorLine, int lineLength,
+	int cursorPos, char ** outStart, char ** outEnd);
 int texteditInsertASCII(texteditor * editor);
 void texteditInsertCharacter(texteditor * editor, int ch);
 void texteditInsertCharAndWrap(texteditor * editor, int ch);
@@ -1117,42 +1119,114 @@ void texteditDeleteLine(texteditor * editor)
 
 /**
  * @relates texteditor
- * @brief Prompt the user for an ASCII character to insert. If the current line
- * begins with a #char command, modify the argument to #char instead.
+ * @brief Given a string and a cursor position, determine the first instance of
+ * '#char' before the cursor, then set the start and end pointers to its
+ * argument, if any. Returns true if the cursor is placed inside or just
+ * after the '#char' or its argument, false otherwise. */
+bool texteditFindCharCommand(char * curEditorLine, int lineLength,
+	int cursorPos, char ** outStart, char ** outEnd) {
+
+	int command_start;
+
+	/* Find the first # to the left of the cursor */
+	for (command_start = cursorPos; command_start >= 0 &&
+		curEditorLine[command_start] != '#'; --command_start) {}
+
+	/* If we didn't find anything, return false. */
+	if (command_start < 0) {
+		return false;
+	}
+
+	const char * char_cmd = "#char";
+
+	/* If the command is not a #char, return false. */
+	if (!str_equ(curEditorLine + command_start,
+		char_cmd, STREQU_UNCASE | STREQU_RFRONT)) {
+		return false;
+	}
+
+	/* Set the start pointer to command_start plus the length
+	 * of #char. Then seek right to find how long the argument
+	 * is. */
+	int arg_start_idx = command_start + strlen(char_cmd);
+	*outStart = curEditorLine + arg_start_idx;
+
+	int arg_end_idx;
+
+	/* A valid argument is any number of spaces followed by
+	 * any number of digits. */
+
+	bool has_space = false;
+	arg_end_idx = arg_start_idx;
+
+	while (arg_end_idx < lineLength
+		&& curEditorLine[arg_end_idx] == ' ') {
+		++arg_end_idx;
+	}
+
+	while (arg_end_idx < lineLength
+		&& curEditorLine[arg_end_idx] >= '0'
+		&& curEditorLine[arg_end_idx] <= '9') {
+		++arg_end_idx;
+	}
+
+	*outEnd = curEditorLine + arg_end_idx;
+
+	/* Return true if we're going to edit a #char, which
+	 * we want to do if the cursor is on the #char or its
+	 * argument, or just after. */
+	return cursorPos >= command_start && cursorPos <= arg_end_idx;
+}
+
+/**
+ * @relates texteditor
+ * @brief Prompt the user for an ASCII character to insert. If the command at
+ * the cursor is #char or its argument, modify the argument to #char instead.
  **/
 int texteditInsertASCII(texteditor * editor)
 {
-	static int selChar; /* TODO: static isn't the way to go, or is it? */
+	/* Use static to remember what character was chosen last for
+	   non-char ASCII inserts. */
+	static int selChar;
 	int choice;
 
 	editor->updateflags |= TUD_EDITAREA;
 
-	/* TODO: let #char be anywhere on the line */
+	/* Check for a #char command in the vicinity of the cursor. */
+	char * charStart, * charEnd;
+	int lineLength = (editor->wrapwidth?editor->wrapwidth:editor->linewidth);
 
-	if (str_equ(editor->curline->s, "#char", STREQU_UNCASE | STREQU_RFRONT)) {
-		/* Change character number for a #char command */
-		char * number;
+	if (findCharCommand(editor->curline->s, lineLength,
+			editor->pos, &charStart, &charEnd)) {
 
-		/* append decimal value for ascii char */
-
-		sscanf(editor->curline->s + 5, "%d", &selChar);
+		/* read decimal value for ascii char to set initial
+		   charselect location */
+		sscanf(charStart, "%d", &selChar);
 		choice = charselect(editor->d, selChar);
 		if (choice == DKEY_QUIT)
 			return DKEY_QUIT;
 		if (choice == -1)
 			return 0;
 
-		editor->curline->s[5] = ' ';
-		editor->curline->s[6] = '\x0';
+		/* create a new line with the new value */
+		char * new_line = str_duplen("", lineLength + 64);
+		int start_idx = charStart-editor->curline->s;
 
-		/* change the character to a string */
-		number = str_duplen("", 64);
-		sprintf(number, "%d", choice);
+		/* copy everything before the old argument, then append
+		 * the new argument and everything after the old argument.
+		 */
+		strncpy(new_line, editor->curline->s,
+			start_idx);
+		int bytes_printed = snprintf(new_line + start_idx,
+			lineLength + 64 - start_idx,
+			" %d%s", choice, charEnd);
 
-		strcat(editor->curline->s, number);
+		/* Copy the new line over if it fits. */
+		if (bytes_printed + start_idx <= lineLength) {
+			strcpy(editor->curline->s, new_line);
+		}
 
-		free(number);
-
+		free(new_line);
 		texteditValidatePosition(editor);
 		editor->updateflags |= TUD_EDITAREA;
 	} else {
