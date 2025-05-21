@@ -1196,7 +1196,7 @@ int texteditInsertASCII(texteditor * editor)
 	char * charStart, * charEnd;
 	int lineLength = (editor->wrapwidth?editor->wrapwidth:editor->linewidth);
 
-	if (findCharCommand(editor->curline->s, lineLength,
+	if (texteditFindCharCommand(editor->curline->s, lineLength,
 			editor->pos, &charStart, &charEnd)) {
 
 		/* read decimal value for ascii char to set initial
@@ -1217,13 +1217,23 @@ int texteditInsertASCII(texteditor * editor)
 		 */
 		strncpy(new_line, editor->curline->s,
 			start_idx);
-		int bytes_printed = snprintf(new_line + start_idx,
+		int arg_bytes_printed = snprintf(new_line + start_idx,
 			lineLength + 64 - start_idx,
-			" %d%s", choice, charEnd);
+			" %d", choice);
+		int post_arg_bytes_printed = strncpy(
+			new_line + start_idx + arg_bytes_printed,
+			charEnd,
+			lineLength + 64 - start_idx - arg_bytes_printed);
+		int bytes_printed = arg_bytes_printed
+			+ post_arg_bytes_printed;
 
-		/* Copy the new line over if it fits. */
+		/* Copy the new line over if it fits. Set the cursor
+		 * to just after the argument so ENTERing to a new line
+		 * is easy even if the new argument has more digits than
+		 * the old. */
 		if (bytes_printed + start_idx <= lineLength) {
 			strcpy(editor->curline->s, new_line);
+			editor->pos = start_idx + arg_bytes_printed;
 		}
 
 		free(new_line);
